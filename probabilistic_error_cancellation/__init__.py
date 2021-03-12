@@ -1,1 +1,1 @@
-from .pauli_matrix import pauli_matrix
+from .probabilistic_error_cancellation import OneQubitProbabilisticErrorCancellation

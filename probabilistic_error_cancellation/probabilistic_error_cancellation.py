@@ -1,14 +1,24 @@
+from typing import List, Tuple
 import numpy as np
+from random import random
 
-from qiskit import QuantumCircuit
+from qiskit import QuantumCircuit, QuantumRegister
+from qiskit import Aer
+from qiskit.compiler import assemble
 from qiskit.quantum_info import pauli_group
-
+from qiskit.extensions import UnitaryGate
 
 
 class OneQubitProbabilisticErrorCancellation: 
+    """Probabilistic Error Cancellation for one qubit system
+    
+    """
 
-    def __init__(self, kraus):
-            
+    def __init__(self, kraus: list):
+        """
+        Args: 
+            kraus: The list of Kraus operator
+        """
         self.number_of_qubits = 1
         self.pauli_matrices = self.pauli_matrix()
         self.d = 2 ** self.number_of_qubits
@@ -21,21 +31,88 @@ class OneQubitProbabilisticErrorCancellation:
 
         self.kraus = kraus
 
-    def run(self, circuit: QuantumCircuit):
+    def simulate_expected_value(self, num_trial: int = 100, experiments: List[Tuple[QuantumCircuit, int]] = None, cost_tot=None) -> list:
+        """Simulate the expectec value of the probabilistic error cancelled quantum circuit
+
+        Args: 
+            num_trial: number of trial
+            experments: 
+            cost_tot: The total cost of Error Mitigation
+        Return: 
+            list: The list of expected value of experiments
+        """
+        simulator = Aer.get_backend('qasm_simulator')
+        if experiments is None: 
+            experiments = self.experiments
+
+        if cost_tot is None: 
+            cost_tot = self.cost_tot
+        self.ev = []
+        for _ in range(num_trial): 
+            counts = {'0': 0, '1': 0}
+            for qc, parity in experiments:
+                qobj = assemble(qc)
+                job = simulator.run(qobj, shots=1)
+                _counts= job.result().get_counts()
+                if parity==1:
+                    counts['0'] += _counts.get('0', 0)
+                    counts['1'] += _counts.get('1', 0)
+                else:
+                    counts['0'] += _counts.get('1', 0)
+                    counts['1'] += _counts.get('0', 0)
+            e = expectation_value(counts) * cost_tot
+            print("Expectation Value: ", e)
+            self.ev.append(float(e))
+        return self.ev 
+
+    def pec_circuits(self, circuit: QuantumCircuit, num_trial: int) -> List[QuantumCircuit]:
+        """Modify QuantumCircuit with pec recover operations
+
+        Args:
+            circuit: Input QuantumCircuit to be modified
+            num_trial: number of trial of Probability error cancellation
         
-        qr_rec = QuantumRegister(1)
-        recover_circuit = QuantumCircuit(qr_rec)
+        Return: 
+            QuantumCircuit: QuantumCircuit inserted recover operations 
+        """
+        cost, probs = self.quasi_probability_method()
 
+        self.cost_tot = cost ** circuit.depth()
+        self.experiments = [insert_recovers(circuit, probs) for _ in range(num_trial)]
+        return self.experiments, self.cost_tot
+
+
+    def insert_recovers(self, circuit:QuantumCircuit, probs:dict)-> QuantumCircuit:
+        """Create QuantumCircuit inserted recover operator"""
         
-        return circuit 
+        qr = QuantumRegister(1)
+        recoverd_qc = QuantumCircuit(qr)
+        cost_tot = 1
+        for node in enumerate(circuit):
+            if node[0].name == 'measure':
+                break
+            gate = node[0]  
+            recover_gate = self.monte_carlo_gate_selection(probs)
+            qr.append(gate, qr[0], [])
+            qr.append(recover_gate, qr[0], [])
+        return recoverd_qc, parity
 
-    def insert_recovers(self, circuit, qreg):
-        return circuit
-
-        return recover_circuit
+    def monte_carlo_gate_selection(self, probability_distribution: dict, parity: int) -> (UnitaryGate, int):
+        r = random()
+        pd = probability_distribution
+        sum_prob = 0
+        for label, _prob in pd.items():
+            sum_prob += _prob
+            if r<sum_prob:
+                if label != 'iden':
+                    parity *= -1
+                recover_op = UnitaryGate(self.prepare_basis_ptm[label])
+                return recover_op, parity
+        
 
     def prepare_basis_ptm(self):
-        """
+        """Prepare pauli transfar matrices of 16 basis operations
+
         https://journals.aps.org/prx/pdf/10.1103/PhysRevX.8.031027 
         のTable 1 についてPauli transfer matrixを計算
         """
@@ -46,13 +123,30 @@ class OneQubitProbabilisticErrorCancellation:
         ryz = 1/np.sqrt(2) * (self.Y + self.Z)
         rzx = 1/np.sqrt(2) * (self.Z + self.X)
         rxy = 1/np.sqrt(2) * (self.X + self.Y)
-        PIx = 1/2 * (self.I + self.X)
-        PIy = 1/2 * (self.I + self.Y)
-        PIz = 1/2 * (self.I + self.Z)
-        PIyz = 1/2 * (self.Y + 1j*self.Z)
-        PIzx = 1/2 * (self.Z+ 1j*self.X)
-        PIxy = 1/2 * (self.X+ 1j*self.Y)
-        _basis_ops = [self.I, self.X, self.Y, self.Z, rx, ry, rz, ryz, rzx, rxy, PIx, PIy, PIz, PIyz, PIzx, PIxy]
+        pix = 1/2 * (self.I + self.X)
+        piy = 1/2 * (self.I + self.Y)
+        piz = 1/2 * (self.I + self.Z)
+        piyz = 1/2 * (self.Y + 1j*self.Z)
+        pizx = 1/2 * (self.Z+ 1j*self.X)
+        pixy = 1/2 * (self.X+ 1j*self.Y)
+        self._basis_ops = {
+            "iden": self.I,
+            "sigmaX": self.X,
+            "sigmaY": self.Y,
+            "sigmaZ": self.Z,
+            "Rx": rx, 
+            "Ry": ry,
+            "Rz": rz,
+            "Ryz": ryz,
+            "Rzx": rzx,
+            "Rxy": rxy,
+            "PIx": pix,
+            "PIy": piy,
+            "PIz": piz,
+            "PIyz": piyz,
+            "PIzx": pizx,
+            "PIxy": pixy,
+        }
 
         return [self.ptm(_basisop, self.pauli_matrices, self.d) for _basisop in _basis_ops]
     
@@ -73,8 +167,8 @@ class OneQubitProbabilisticErrorCancellation:
         def emap(K, rho):
             e_rho = np.array([[0.0, 0.0], [0.0, 0.0]])
             for K_i in K: 
-                erhoe = np.dot(K_i, np.dot(rho, K_i.getH()))
-                e_rho = e_rho + erhoe
+                krhokdag = np.dot(K_i, np.dot(rho, K_i.getH()))
+                e_rho = e_rho + krhokdag
             return e_rho
 
         mat = []
@@ -86,7 +180,7 @@ class OneQubitProbabilisticErrorCancellation:
             mat.append(row)
         return np.array(mat)
 
-    def quasi_probability_method(self): 
+    def quasi_probability_method(self) -> (float, dict): 
         # calculate Pauli transfar matrix E and get inverse matrix
         E = ptm(self.kraus, self.pauli_matrices, self.d)
         E_inv = np.linalg.inv(E)
@@ -108,39 +202,41 @@ class OneQubitProbabilisticErrorCancellation:
         q_PIyz = sympy.Symbol('q_PIyz')
         q_PIzx = sympy.Symbol('q_PIzx')
         q_PIxy = sympy.Symbol('q_PIxy')
-        q_list = [q_iden, q_sigmaX, q_sigmaY, q_sigmaZ, q_Rx, q_Ry, q_Rz, q_Ryz, q_Rzx, q_Rxy, q_PIx, q_PIy, q_PIz, q_PIyz, q_PIzx, q_PIxy]
+        quasi_probs = [q_iden, q_sigmaX, q_sigmaY, q_sigmaZ, q_Rx, q_Ry, q_Rz, q_Ryz, q_Rzx, q_Rxy, q_PIx, q_PIy, q_PIz, q_PIyz, q_PIzx, q_PIxy]
 
-        solutions = solve_compose_simulequ(q_list, E_inv)
+        solutions = solve_compose_simulequ(quasi_probs, E_inv)
 
         # get cost of PEC and recover probability
-        self.cost = self.qem_cost(solutions)
+        cost = self.qem_cost(solutions)
 
-        self.recover_probabilities = {
-            "p_iden": quasi_to_prob(solutions[q_iden], self.cost),
-            "p_sigmaX": quasi_to_prob(solutions[q_sigmaX], self.cost),
-            "p_sigmaY": quasi_to_prob(solutions[q_sigmaY], self.cost),
-            "p_sigmaZ": quasi_to_prob(solutions[q_sigmaZ], self.cost),
-            "p_Rx": quasi_to_prob(solutions[q_Rx], self.cost), 
-            "p_Ry": quasi_to_prob(solutions[q_Ry], self.cost),
-            "p_Rz": quasi_to_prob(solutions[q_Rz], self.cost),
-            "p_Ryz": quasi_to_prob(solutions[q_Ryz], self.cost),
-            "p_Rzx": quasi_to_prob(solutions[q_Rzx], self.cost),
-            "p_Rxy": quasi_to_prob(solutions[q_Rxy], self.cost),
-            "p_PIx": quasi_to_prob(solutions[q_PIx], self.cost),
-            "p_PIy": quasi_to_prob(solutions[q_PIy], self.cost),
-            "p_PIz": quasi_to_prob(solutions[q_PIz], self.cost),
-            "p_PIyz": quasi_to_prob(solutions[q_PIyz], self.cost),
-            "p_PIzx": quasi_to_prob(solutions[q_PIzx], self.cost),
-            "p_PIxy": quasi_to_prob(solutions[q_PIxy], self.cost),
+        recover_probabilities = {
+            "iden": quasi_to_prob(solutions[q_iden], self.cost),
+            "sigmaX": quasi_to_prob(solutions[q_sigmaX], self.cost),
+            "sigmaY": quasi_to_prob(solutions[q_sigmaY], self.cost),
+            "sigmaZ": quasi_to_prob(solutions[q_sigmaZ], self.cost),
+            "Rx": quasi_to_prob(solutions[q_Rx], self.cost), 
+            "Ry": quasi_to_prob(solutions[q_Ry], self.cost),
+            "Rz": quasi_to_prob(solutions[q_Rz], self.cost),
+            "Ryz": quasi_to_prob(solutions[q_Ryz], self.cost),
+            "Rzx": quasi_to_prob(solutions[q_Rzx], self.cost),
+            "Rxy": quasi_to_prob(solutions[q_Rxy], self.cost),
+            "PIx": quasi_to_prob(solutions[q_PIx], self.cost),
+            "PIy": quasi_to_prob(solutions[q_PIy], self.cost),
+            "PIz": quasi_to_prob(solutions[q_PIz], self.cost),
+            "PIyz": quasi_to_prob(solutions[q_PIyz], self.cost),
+            "PIzx": quasi_to_prob(solutions[q_PIzx], self.cost),
+            "PIxy": quasi_to_prob(solutions[q_PIxy], self.cost),
         }
+
+        return cost, recover_probabilities
     
-    def solve_compose_simulequ(self, q_list, E_inv):
+    def solve_compose_simulequ(self, quasi_probabilities, E_inv):
         equ_list = []
         for i in range(4): 
             for j in range(4):
                 equ_ij = 0
                 for l in range(16):
-                    equ_ij += q_list[l]*Basis_op[l][i][j]
+                    equ_ij += quasi_probabilities[l]*Basis_op[l][i][j]
                 equ_list.append(equ_ij - E_inv[i][j])
 
         return sympy.solve(equ_list)

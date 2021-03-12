@@ -36,7 +36,7 @@ def get_noise_gate_list(target_index_list: list, noise_map_list: list) -> list:
                 kraus_op_list.append(kraus_op)
             noise = qulacs.gate.CPTP(kraus_op_list)
             noise_gate_list.append(noise)
-        return noise_gate_list
+        # return noise_gate_list
     return noise_gate_list
 
 
