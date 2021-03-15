@@ -1,5 +1,6 @@
-from typing import List, Tuple
+from typing import List, Tuple, Union
 import numpy as np
+import sympy
 from random import random
 
 from qiskit import QuantumCircuit, QuantumRegister
@@ -7,6 +8,7 @@ from qiskit import Aer
 from qiskit.compiler import assemble
 from qiskit.quantum_info import pauli_group
 from qiskit.extensions import UnitaryGate
+
 
 
 class OneQubitProbabilisticErrorCancellation: 
@@ -31,12 +33,11 @@ class OneQubitProbabilisticErrorCancellation:
 
         self.kraus = kraus
 
-    def simulate_expected_value(self, num_trial: int = 100, experiments: List[Tuple[QuantumCircuit, int]] = None, cost_tot=None) -> list:
+    def simulate_expected_value(self, experiments: List[Tuple[QuantumCircuit, int]] = None, cost_tot=None) -> list:
         """Simulate the expectec value of the probabilistic error cancelled quantum circuit
 
         Args: 
-            num_trial: number of trial
-            experments: 
+            experments: QuantumCircuit and parity
             cost_tot: The total cost of Error Mitigation
         Return: 
             list: The list of expected value of experiments
@@ -47,25 +48,24 @@ class OneQubitProbabilisticErrorCancellation:
 
         if cost_tot is None: 
             cost_tot = self.cost_tot
-        self.ev = []
-        for _ in range(num_trial): 
-            counts = {'0': 0, '1': 0}
-            for qc, parity in experiments:
-                qobj = assemble(qc)
-                job = simulator.run(qobj, shots=1)
-                _counts= job.result().get_counts()
-                if parity==1:
-                    counts['0'] += _counts.get('0', 0)
-                    counts['1'] += _counts.get('1', 0)
-                else:
-                    counts['0'] += _counts.get('1', 0)
-                    counts['1'] += _counts.get('0', 0)
-            e = expectation_value(counts) * cost_tot
-            print("Expectation Value: ", e)
-            self.ev.append(float(e))
+
+        counts = {'0': 0, '1': 0}
+        for qc, parity in experiments:
+            qobj = assemble(qc)
+            job = simulator.run(qobj, shots=1)
+            _counts= job.result().get_counts()
+            if parity==1:
+                counts['0'] += _counts.get('0', 0)
+                counts['1'] += _counts.get('1', 0)
+            else:
+                counts['0'] += _counts.get('1', 0)
+                counts['1'] += _counts.get('0', 0)
+        e = self.expectation_value(counts) * cost_tot
+        print("Expectation Value: ", e)
+        self.ev = float(e)
         return self.ev 
 
-    def pec_circuits(self, circuit: QuantumCircuit, num_trial: int) -> List[QuantumCircuit]:
+    def pec_circuits(self, circuits: Union[List[QuantumCircuit], QuantumCircuit], num_trial: int = None) -> List[QuantumCircuit]:
         """Modify QuantumCircuit with pec recover operations
 
         Args:
@@ -77,8 +77,10 @@ class OneQubitProbabilisticErrorCancellation:
         """
         cost, probs = self.quasi_probability_method()
 
-        self.cost_tot = cost ** circuit.depth()
-        self.experiments = [insert_recovers(circuit, probs) for _ in range(num_trial)]
+        if isinstance(circuits, QuantumCircuit):
+            circuits = [circuits] * num_trial
+        self.cost_tot = cost ** circuits[0].depth()
+        self.experiments = [self.insert_recovers(circuit, probs) for circuit in circuits]
         return self.experiments, self.cost_tot
 
 
@@ -87,14 +89,15 @@ class OneQubitProbabilisticErrorCancellation:
         
         qr = QuantumRegister(1)
         recoverd_qc = QuantumCircuit(qr)
-        cost_tot = 1
-        for node in enumerate(circuit):
-            if node[0].name == 'measure':
+        parity = 1
+        for node in circuit:
+            if node[0].name == 'measure' or node[0].name == 'barrier':
                 break
             gate = node[0]  
-            recover_gate = self.monte_carlo_gate_selection(probs)
-            qr.append(gate, qr[0], [])
-            qr.append(recover_gate, qr[0], [])
+            recover_gate, parity = self.monte_carlo_gate_selection(probs, parity)
+            recoverd_qc.append(gate, [qr[0]])
+            recoverd_qc.append(recover_gate, [qr[0]])
+        recoverd_qc.measure_all()
         return recoverd_qc, parity
 
     def monte_carlo_gate_selection(self, probability_distribution: dict, parity: int) -> (UnitaryGate, int):
@@ -106,7 +109,7 @@ class OneQubitProbabilisticErrorCancellation:
             if r<sum_prob:
                 if label != 'iden':
                     parity *= -1
-                recover_op = UnitaryGate(self.prepare_basis_ptm[label])
+                recover_op = UnitaryGate(self.basis_ops[label])
                 return recover_op, parity
         
 
@@ -129,7 +132,7 @@ class OneQubitProbabilisticErrorCancellation:
         piyz = 1/2 * (self.Y + 1j*self.Z)
         pizx = 1/2 * (self.Z+ 1j*self.X)
         pixy = 1/2 * (self.X+ 1j*self.Y)
-        self._basis_ops = {
+        self.basis_ops = {
             "iden": self.I,
             "sigmaX": self.X,
             "sigmaY": self.Y,
@@ -148,7 +151,7 @@ class OneQubitProbabilisticErrorCancellation:
             "PIxy": pixy,
         }
 
-        return [self.ptm(_basisop, self.pauli_matrices, self.d) for _basisop in _basis_ops]
+        return [self.ptm(_basisop, self.pauli_matrices, self.d) for _basisop in self.basis_ops.values()]
     
     def pauli_matrix(self):
         return [np.matrix(pauli.to_matrix()) for pauli in pauli_group(self.number_of_qubits)]
@@ -182,7 +185,7 @@ class OneQubitProbabilisticErrorCancellation:
 
     def quasi_probability_method(self) -> (float, dict): 
         # calculate Pauli transfar matrix E and get inverse matrix
-        E = ptm(self.kraus, self.pauli_matrices, self.d)
+        E = self.ptm(self.kraus, self.pauli_matrices, self.d)
         E_inv = np.linalg.inv(E)
 
         # solve simultaneous equation to get recover probability from quasi-probability
@@ -204,39 +207,39 @@ class OneQubitProbabilisticErrorCancellation:
         q_PIxy = sympy.Symbol('q_PIxy')
         quasi_probs = [q_iden, q_sigmaX, q_sigmaY, q_sigmaZ, q_Rx, q_Ry, q_Rz, q_Ryz, q_Rzx, q_Rxy, q_PIx, q_PIy, q_PIz, q_PIyz, q_PIzx, q_PIxy]
 
-        solutions = solve_compose_simulequ(quasi_probs, E_inv)
+        solutions = self.solve_compose_simulequ(quasi_probs, E_inv)
 
         # get cost of PEC and recover probability
-        cost = self.qem_cost(solutions)
+        self.cost = self.qem_cost(solutions)
 
         recover_probabilities = {
-            "iden": quasi_to_prob(solutions[q_iden], self.cost),
-            "sigmaX": quasi_to_prob(solutions[q_sigmaX], self.cost),
-            "sigmaY": quasi_to_prob(solutions[q_sigmaY], self.cost),
-            "sigmaZ": quasi_to_prob(solutions[q_sigmaZ], self.cost),
-            "Rx": quasi_to_prob(solutions[q_Rx], self.cost), 
-            "Ry": quasi_to_prob(solutions[q_Ry], self.cost),
-            "Rz": quasi_to_prob(solutions[q_Rz], self.cost),
-            "Ryz": quasi_to_prob(solutions[q_Ryz], self.cost),
-            "Rzx": quasi_to_prob(solutions[q_Rzx], self.cost),
-            "Rxy": quasi_to_prob(solutions[q_Rxy], self.cost),
-            "PIx": quasi_to_prob(solutions[q_PIx], self.cost),
-            "PIy": quasi_to_prob(solutions[q_PIy], self.cost),
-            "PIz": quasi_to_prob(solutions[q_PIz], self.cost),
-            "PIyz": quasi_to_prob(solutions[q_PIyz], self.cost),
-            "PIzx": quasi_to_prob(solutions[q_PIzx], self.cost),
-            "PIxy": quasi_to_prob(solutions[q_PIxy], self.cost),
+            "iden": self.quasi_to_prob(solutions[q_iden], self.cost),
+            "sigmaX": self.quasi_to_prob(solutions[q_sigmaX], self.cost),
+            "sigmaY": self.quasi_to_prob(solutions[q_sigmaY], self.cost),
+            "sigmaZ": self.quasi_to_prob(solutions[q_sigmaZ], self.cost),
+            "Rx": self.quasi_to_prob(solutions[q_Rx], self.cost), 
+            "Ry": self.quasi_to_prob(solutions[q_Ry], self.cost),
+            "Rz": self.quasi_to_prob(solutions[q_Rz], self.cost),
+            "Ryz": self.quasi_to_prob(solutions[q_Ryz], self.cost),
+            "Rzx": self.quasi_to_prob(solutions[q_Rzx], self.cost),
+            "Rxy": self.quasi_to_prob(solutions[q_Rxy], self.cost),
+            "PIx": self.quasi_to_prob(solutions[q_PIx], self.cost),
+            "PIy": self.quasi_to_prob(solutions[q_PIy], self.cost),
+            "PIz": self.quasi_to_prob(solutions[q_PIz], self.cost),
+            "PIyz": self.quasi_to_prob(solutions[q_PIyz], self.cost),
+            "PIzx": self.quasi_to_prob(solutions[q_PIzx], self.cost),
+            "PIxy": self.quasi_to_prob(solutions[q_PIxy], self.cost),
         }
 
-        return cost, recover_probabilities
+        return self.cost, recover_probabilities
     
     def solve_compose_simulequ(self, quasi_probabilities, E_inv):
         equ_list = []
         for i in range(4): 
             for j in range(4):
                 equ_ij = 0
-                for l in range(16):
-                    equ_ij += quasi_probabilities[l]*Basis_op[l][i][j]
+                for l, basis_op in enumerate(self.ptm_basis_op):
+                    equ_ij += quasi_probabilities[l]*basis_op[i][j]
                 equ_list.append(equ_ij - E_inv[i][j])
 
         return sympy.solve(equ_list)
@@ -255,6 +258,9 @@ class OneQubitProbabilisticErrorCancellation:
         p = abs(q)/cost
         return p 
 
-
+    def expectation_value(self, probability_distribution):
+        gra_pop = probability_distribution.get('0', 0)
+        exc_pop = probability_distribution.get('1', 0)
+        return (gra_pop*1 + exc_pop*(-1)) / (gra_pop+exc_pop)
 class NumberOfQubitError(Exception):
     pass
