@@ -9,8 +9,12 @@ qiskit = "*"
 matplotlib = "*"
 pylatexenc = "*"
 qulacs = "*"
+ipykernel = "*"
+jupyter = "*"
 
 [dev-packages]
+autopep8 = "*"
+flake8 = "*"
 
 [requires]
 python_version = "3.8"

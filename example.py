@@ -7,6 +7,7 @@ from probabilistic_error_cancellation import OneQubitProbabilisticErrorCancellat
 from utils import OneQubitErrorChannel
 from utils.compose_noisy_circuit import compose_noisy_circuit
 
+# from qiskit_to_qulacs import get_noise_gate_list, 
 
 def evaluate_dephasing_error(depth, num_shots, num_trial, save_path):
     # load and get provider from IBM Q api
@@ -65,14 +66,18 @@ def evaluate_dephasing_error(depth, num_shots, num_trial, save_path):
     ax.hist(noisy_ev, color='m', edgecolor='k', alpha=0.5, bins=10, label="Noisy")
     ax.hist(pec_ev, color='g', edgecolor='k', alpha=0.5, bins=30, label="PEC")
 
-
     plt.legend()
     plt.show()
     plt.savefig(save_path)
 
+
+# def evaluate_amplitudedamping_error(depth, num_shots, num_trial, save_path):
+
+
+
 if __name__ == "__main__":
-    depth = 101
+    depth = 31
     num_shots = 1000
-    num_trial = 1000
-    save_path = '/Users/rum/Documents/error_mitigation/dphasing.png'
+    num_trial = 100
+    save_path = '/Users/rum/Documents/error_mitigation/dephasing.png'
     evaluate_dephasing_error(depth, num_shots, num_trial, save_path)
