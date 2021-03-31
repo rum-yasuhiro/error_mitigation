@@ -7,13 +7,16 @@ from qiskit import Aer
 from qiskit.compiler import assemble
 from qiskit.quantum_info import pauli_group
 from qiskit.extensions import UnitaryGate
+from qiskit.circuit.library.standard_gates import (
+    IGate, XGate, YGate, ZGate, RXGate, RYGate, RZGate)
+from qiskit.circuit.measure import Measure
 
 
 class OneQubitProbabilisticErrorCancellation():
 
     """Probabilistic Error Cancellation for one qubit system"""
 
-    def __init__(self, kraus: list):
+    def __init__(self, kraus: list, basis_ptm: list = None):
         """
         Args:
             kraus: The list of Kraus operator
@@ -26,7 +29,10 @@ class OneQubitProbabilisticErrorCancellation():
         self.Y = self.pauli_matrices[2]
         self.Z = self.pauli_matrices[3]
 
-        self.ptm_basis_op = self.prepare_basis_ptm()
+        if basis_ptm is None:
+            self.basis_ptm = self.prepare_basis_ptm()
+        else:
+            self.basis_ptm = basis_ptm
 
         self.kraus = kraus
 
@@ -36,7 +42,8 @@ class OneQubitProbabilisticErrorCancellation():
          error cancelled quantum circuit
 
         Args
-            experments: The tupple of QuantumCircuit that inserted recover op and its parity
+            experments: The tupple of QuantumCircuit that inserted recover op
+                        and its parity.
             cost_tot: The total cost of Error Mitigation
         Return
             list: The list of expected value of experiments
@@ -59,7 +66,7 @@ class OneQubitProbabilisticErrorCancellation():
 
     def pec_circuits(self,
                      circuits: Union[List[QuantumCircuit], QuantumCircuit],
-                     num_trial: int = None) -> List[QuantumCircuit]:
+                     num_trial: int = 100) -> List[QuantumCircuit]:
         """Modify QuantumCircuit with pec recover operations
 
         Args:
@@ -70,11 +77,11 @@ class OneQubitProbabilisticErrorCancellation():
             QuantumCircuit: QuantumCircuit inserted recover operations
         """
         cost, probs = self.quasi_probability_method()
-
         if isinstance(circuits, QuantumCircuit):
             circuits = [circuits] * num_trial
+
         self.cost_tot = cost ** circuits[0].depth()
-        self.experiments = [self.Insert_recovers(
+        self.experiments = [self.insert_recovers(
             circuit, probs) for circuit in circuits]
         return self.experiments, self.cost_tot
 
@@ -117,7 +124,7 @@ class OneQubitProbabilisticErrorCancellation():
                 recover = UnitaryGate(self.basis_ops[label])
                 return recover, parity
 
-    def prepare_basis_ptm(self, basis_ptm: list = None):
+    def prepare_basis_ptm(self):
         """Prepare pauli transfar matrices of 16 basis operations
         Basis operation selected by Endo
         https://journals.aps.org/prx/pdf/10.1103/PhysRevX.8.031027
@@ -135,26 +142,31 @@ class OneQubitProbabilisticErrorCancellation():
         piyz = 1/2 * (self.Y + 1j*self.Z)
         pizx = 1/2 * (self.Z + 1j*self.X)
         pixy = 1/2 * (self.X + 1j*self.Y)
+
+        basis_mats = [self.Id, self.X, self.Y, self.Z, rx, ry,
+                      rz, ryz, rzx, rxy, pix, piy, piz, piyz, pizx, pixy]
+
         self.basis_ops = {
-            "iden": self.Id,
-            "sigmaX": self.X,
-            "sigmaY": self.Y,
-            "sigmaZ": self.Z,
-            "Rx": rx,
-            "Ry": ry,
-            "Rz": rz,
-            "Ryz": ryz,
-            "Rzx": rzx,
-            "Rxy": rxy,
-            "PIx": pix,
+            "iden": [IGate()],
+            "sigmaX": [XGate()],
+            "sigmaY": [YGate()],
+            "sigmaZ": [ZGate()],
+            "Rx": [RXGate(np.pi/2)],
+            "Ry": [RYGate(np.pi/2)],
+            "Rz": [RZGate(np.pi/2)],
+            "Ryz": [RXGate(np.pi/2), RZGate(np.pi/2)],
+            "Rzx": [RZGate(np.pi/2), RXGate(np.pi/2), RZGate(np.pi/2)],
+            "Rxy": [XGate(), RZGate(np.pi/2)],
+            "PIx": [RZGate(3*np.pi/2), RXGate(3*np.pi/2), Measure, RXGate(np.pi/2), RZGate(np.pi/2)],
             "PIy": piy,
             "PIz": piz,
             "PIyz": piyz,
             "PIzx": pizx,
             "PIxy": pixy,
         }
+
         basis_ptm = [self.ptm(_basisop, self.pauli_matrices, self.d)
-                     for _basisop in self.basis_ops.values()]
+                     for _basisop in basis_mats]
 
         return basis_ptm
 
@@ -250,7 +262,7 @@ class OneQubitProbabilisticErrorCancellation():
         for i in range(4):
             for j in range(4):
                 equ_ij = 0
-                for k, basis_op in enumerate(self.ptm_basis_op):
+                for k, basis_op in enumerate(self.basis_ptm):
                     equ_ij += quasi_probabilities[k]*basis_op[i][j]
                 equ_list.append(equ_ij - E_inv[i][j])
 

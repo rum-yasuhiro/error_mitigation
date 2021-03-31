@@ -1,1 +1,1 @@
-from .probabilistic_error_cancellation import OneQubitProbabilisticErrorCancellation
+from .one_qubit_pec import OneQubitProbabilisticErrorCancellation
