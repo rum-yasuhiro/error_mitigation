@@ -34,9 +34,7 @@ class OneQubitErrorChannel():
         return [(1 - p, self.I), (p, self.Z)]
 
     def amplitude_damping_channel(self, t1, dt):
-        t1 *= 100000
-        dt *= 100000
-        gamma_t = 1 - np.e**(1/t1)*dt
+        gamma_t = 1 - np.e**((-1/t1)*dt)
         K_0 = np.matrix([[1, 0], [0, np.sqrt(1-gamma_t)]])
         K_1 = np.matrix([[0, np.sqrt(gamma_t)], [0, 0]])
         amplitude_damping = [K_0, K_1]

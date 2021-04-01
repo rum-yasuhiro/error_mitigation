@@ -83,7 +83,7 @@ class OneQubitProbabilisticErrorCancellation():
             qobj = assemble(qc)
             job = simulator.run(qobj, shots=1)
             _counts = job.result().get_counts()
-
+            print(_counts)
             # if the bit in the sub cregs all 0, it accepted
             if '1' in list(_counts.keys())[0][1:]:
                 counts['0'] += 1
