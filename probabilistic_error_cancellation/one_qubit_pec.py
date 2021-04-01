@@ -2,7 +2,7 @@ from typing import List, Union
 import numpy as np
 import sympy
 from random import random
-from qiskit import QuantumCircuit, QuantumRegister
+from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
 from qiskit import Aer
 from qiskit.compiler import assemble
 from qiskit.quantum_info import pauli_group
@@ -54,12 +54,50 @@ class OneQubitProbabilisticErrorCancellation():
             qobj = assemble(qc)
             job = simulator.run(qobj, shots=1)
             _counts = job.result().get_counts()
+            print(_counts)
             if parity == 1:
                 counts['1'] += _counts.get('0', 0)
                 counts['-1'] += _counts.get('1', 0)
             else:
                 counts['1'] += _counts.get('1', 0)
                 counts['-1'] += _counts.get('0', 0)
+        self.ev = self.expectation_value(counts) * self.cost_tot
+        print("Expectation Value: ", self.ev)
+        return self.ev
+
+    def simulate_nonunital_noise(self) -> list:
+        """
+        Simulate the expectec value of the probabilistic
+         error cancelled quantum circuit
+
+        Args
+            experments: The tupple of QuantumCircuit that inserted recover op
+                        and its parity.
+            cost_tot: The total cost of Error Mitigation
+        Return
+            list: The list of expected value of experiments
+        """
+        simulator = Aer.get_backend('qasm_simulator')
+        counts = {'1': 0, '-1': 0, '0': 0}
+        for qc, parity in self.experiments:
+            qobj = assemble(qc)
+            job = simulator.run(qobj, shots=1)
+            _counts = job.result().get_counts()
+
+            # if the bit in the sub cregs all 0, it accepted
+            if '1' in list(_counts.keys())[0][1:]:
+                counts['0'] += 1
+            else:
+                if parity == 1:
+                    if list(_counts.keys())[0][0] == '0':
+                        counts['1'] += 1
+                    else:
+                        counts['-1'] += 1
+                else:
+                    if list(_counts.keys())[0][0] == '0':
+                        counts['-1'] += 1
+                    else:
+                        counts['1'] += 1
         self.ev = self.expectation_value(counts) * self.cost_tot
         print("Expectation Value: ", self.ev)
         return self.ev
@@ -91,17 +129,29 @@ class OneQubitProbabilisticErrorCancellation():
         """Create QuantumCircuit inserted recover operator"""
 
         qr = QuantumRegister(1)
-        recoverd_qc = QuantumCircuit(qr)
+        cr = ClassicalRegister(1)
+        recoverd_qc = QuantumCircuit(qr, cr)
         parity = 1
         for node in circuit:
             if node[0].name == 'measure' or node[0].name == 'barrier':
                 break
             gate = node[0]
-            recover_gate, parity = self.monte_carlo_gate_selection(
+            recover, parity = self.monte_carlo_gate_selection(
                 probs, parity)
+
+            # append original circuit's gate
             recoverd_qc.append(gate, [qr[0]])
-            recoverd_qc.append(recover_gate, [qr[0]])
-        recoverd_qc.measure_all()
+
+            # insert recover gate(s)
+            for rcv in recover:
+                if isinstance(rcv, Measure):
+                    _new_creg = ClassicalRegister(1)
+                    recoverd_qc.add_register(_new_creg)
+                    recoverd_qc.append(rcv, [qr[0]], [_new_creg[0]])
+                else:
+                    recoverd_qc.append(rcv, [qr[0]])
+
+        recoverd_qc.measure(qr, cr)
         return recoverd_qc, parity
 
     def monte_carlo_gate_selection(self,
@@ -121,7 +171,7 @@ class OneQubitProbabilisticErrorCancellation():
             if r < sum_prob:
                 if label != 'iden':
                     parity *= -1
-                recover = UnitaryGate(self.basis_ops[label])
+                recover = self.basis_ops[label]
                 return recover, parity
 
     def prepare_basis_ptm(self):
@@ -157,12 +207,14 @@ class OneQubitProbabilisticErrorCancellation():
             "Ryz": [RXGate(np.pi/2), RZGate(np.pi/2)],
             "Rzx": [RZGate(np.pi/2), RXGate(np.pi/2), RZGate(np.pi/2)],
             "Rxy": [XGate(), RZGate(np.pi/2)],
-            "PIx": [RZGate(3*np.pi/2), RXGate(3*np.pi/2), Measure, RXGate(np.pi/2), RZGate(np.pi/2)],
-            "PIy": piy,
-            "PIz": piz,
-            "PIyz": piyz,
-            "PIzx": pizx,
-            "PIxy": pixy,
+            "PIx": [RZGate(3*np.pi/2), RXGate(3*np.pi/2), Measure,
+                    RXGate(np.pi/2), RZGate(np.pi/2)],
+            "PIy": [RXGate(np.pi/2), Measure(), RXGate(3*np.pi/2)],
+            "PIz": [Measure()],
+            "PIyz": [RXGate(3*np.pi/2), RZGate(3*np.pi/2), Measure(),
+                     RXGate(3*np.pi/2), RZGate(np.pi/2)],
+            "PIzx": [RXGate(np.pi/2), Measure(), RXGate(3*np.pi/2), ZGate()],
+            "PIxy": [Measure(), XGate()],
         }
 
         basis_ptm = [self.ptm(_basisop, self.pauli_matrices, self.d)

@@ -1,5 +1,5 @@
 import pytest
-from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
+from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, IBMQ
 
 
 @pytest.fixture
@@ -15,3 +15,11 @@ def prepare_hzh_qc():
     qc.measure(qr, cr)
 
     return qc
+
+
+@pytest.fixture
+def prepare_ibmqx2():
+    IBMQ.load_account()
+    provider = IBMQ.get_provider(hub='ibm-q', group='open', project='main')
+    backend = provider.get_backend('ibmqx2')
+    return backend
